@@ -10,33 +10,47 @@ this repository should be installed in the same way as any other plugin.
 
 To install the driver for use in a single application:
 
-	cd my/app/plugins
-	git clone git://github.com/ichikaway/cakephp-mongodb.git mongodb
+	cd my/app/Plugin
+	git clone git://github.com/ichikaway/cakephp-mongodb.git Mongodb
 
 To install the driver for use in any/multiple application(s)
 
 	# where ROOT is the name of the directory parent to the base index.php of CakePHP.
-	cd ROOT/plugins
-	git clone git://github.com/ichikaway/cakephp-mongodb.git mongodb
+	cd ROOT/Plugin
+	git clone git://github.com/ichikaway/cakephp-mongodb.git Mongodb
 	
 ## Sample Code
 
 To use this DB driver, install (obviously) and define a db source such as follows:
 
 	<?php
+	//app/config/bootstrap.php
+	CakePlugin::loadAll();
+
+
 	// app/config/database.php
 	class DATABASE_CONFIG {
-
-		public $mongo = array(
-			'driver' => 'mongodb.mongodbSource',
-			'database' => 'driver',
+		public $default = array(
+			'datasource' => 'Mongodb.MongodbSource',
 			'host' => 'localhost',
+			'database' => 'blog',
 			'port' => 27017,
+			'prefix' => '',
+			'persistent' => 'true',
 			/* optional auth fields
 			'login' => 'mongo',	
-			'password' => 'awesomeness',	
+			'password' => 'awesomeness',
+			'replicaset' => array('host' => 'mongodb://hoge:hogehoge@localhost:27021,localhost:27022/blog', 
+			                      'options' => array('replicaSet' => 'myRepl')
+					     ),
 			*/
-		);  
+		);
+	}
+
+
+More detail of replicaset in wiki:
+https://github.com/ichikaway/cakephp-mongodb/wiki/How-to-connect-to-replicaset-servers
+
 
 Model files need to have mongoSchema property - or make use of the schemaless behavior. 
 

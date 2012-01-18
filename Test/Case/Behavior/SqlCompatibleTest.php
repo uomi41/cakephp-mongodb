@@ -18,10 +18,12 @@
  * @license       http://www.opensource.org/licenses/mit-license.php The MIT License
  */
 
-/**
- * Import relevant classes for testing, rely on main test for loading clases
- */
-require_once(dirname(dirname(__FILE__)) . DS . 'datasources' . DS . 'mongodb_source.test.php');
+
+App::uses('Model', 'Model');
+App::uses('AppModel', 'Model');
+
+
+
 
 /**
  * SqlCompatiblePost class
@@ -30,7 +32,7 @@ require_once(dirname(dirname(__FILE__)) . DS . 'datasources' . DS . 'mongodb_sou
  * @package       mongodb
  * @subpackage    mongodb.tests.cases.behaviors
  */
-class SqlCompatiblePost extends Post {
+class SqlCompatiblePost extends AppModel {
 
 /**
  * useDbConfig property
@@ -74,7 +76,7 @@ class SqlCompatibleTest extends CakeTestCase {
  * @access protected
  */
 	protected $_config = array(
-		'datasource' => 'mongodb',
+		'datasource' => 'Mongodb.MongodbSource',
 		'host' => 'localhost',
 		'login' => '',
 		'password' => '',
@@ -292,6 +294,66 @@ class SqlCompatibleTest extends CakeTestCase {
 		);
 		$this->assertEqual($conditions, $this->Post->lastQuery['conditions']);
 	}
+
+
+/**
+ * Order method
+ *
+ * @return void
+ * @access public
+ */
+	public function testOrderDESC() {
+		$expected = array(20, 19);
+		$result = $this->Post->find('all', array(
+			'conditions' => array('title >' => 18),
+			'fields' => array('_id', 'title'),
+			'order' => array('title DESC')
+		));
+		$result = Set::extract($result, '/Post/title');
+		$this->assertEqual($expected, $result);
+
+		$order = array(array('title' => 'DESC'));
+		$this->assertEqual($order, $this->Post->lastQuery['order']);
+	}
+
+/**
+ * Order method
+ *
+ * @return void
+ * @access public
+ */
+	public function testOrderASC() {
+		$expected = array(19, 20);
+		$result = $this->Post->find('all', array(
+			'conditions' => array('title >' => 18),
+			'fields' => array('_id', 'title'),
+			'order' => array('title ASC')
+		));
+		$result = Set::extract($result, '/Post/title');
+		$this->assertEqual($expected, $result);
+
+		$order = array(array('title' => 'ASC'));
+		$this->assertEqual($order, $this->Post->lastQuery['order']);
+	}
+
+
+/**
+ * Order method with model alias
+ *
+ * @return void
+ * @access public
+ */
+	public function testOrderWithModelAlias() {
+		$expected = array(20, 19);
+		$result = $this->Post->find('all', array(
+			'conditions' => array('title >' => 18),
+			'fields' => array('_id', 'title'),
+			'order' => array('Post.title DESC')
+		));
+		$result = Set::extract($result, '/Post/title');
+		$this->assertEqual($expected, $result);
+	}
+
 
 
 /**

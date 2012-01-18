@@ -24,7 +24,8 @@
  * @license       http://www.opensource.org/licenses/mit-license.php The MIT License
  */
 
-App::import('Datasource', 'DboSource');
+App::uses('DboSource', 'Model/Datasource');
+App::uses('SchemalessBehavior', 'Mongodb.Model/Behavior');
 
 /**
  * MongoDB Source
@@ -90,7 +91,8 @@ class MongodbSource extends DboSource {
 		'database'   => '',
 		'port'       => '27017',
 		'login'		=> '',
-		'password'	=> ''
+		'password'	=> '',
+		'replicaset'	=> '',
 	);
 
 /**
@@ -118,7 +120,8 @@ class MongodbSource extends DboSource {
  */
 	protected $_defaultSchema = array(
 		'_id' => array('type' => 'string', 'length' => 24, 'key' => 'primary'),
-		'created' => array('type' => 'datetime', 'default' => null)
+		'created' => array('type' => 'datetime', 'default' => null),
+		'modified' => array('type' => 'datetime', 'default' => null)
 	);
 
 /**
@@ -176,10 +179,16 @@ class MongodbSource extends DboSource {
 
 			$host = $this->createConnectionName($this->config, $this->_driverVersion);
 
-			if ($this->_driverVersion >= '1.2.0') {
+			if (isset($this->config['replicaset']) && count($this->config['replicaset']) === 2) {
+				$this->connection = new Mongo($this->config['replicaset']['host'], $this->config['replicaset']['options']);
+			} else if ($this->_driverVersion >= '1.2.0') {
 				$this->connection = new Mongo($host, array("persist" => $this->config['persistent']));
 			} else {
 				$this->connection = new Mongo($host, true, $this->config['persistent']);
+			}
+
+			if (isset($this->config['slaveok'])) {
+				$this->connection->setSlaveOkay($this->config['slaveok']);
 			}
 
 			if ($this->_db = $this->connection->selectDB($this->config['database'])) {
@@ -359,17 +368,7 @@ class MongodbSource extends DboSource {
 		if (!$this->isConnected()) {
 			return false;
 		}
-		
-		$collections = $this->_db->listCollections();
-		$sources = array();
-		
-		if(!empty($collections)){
-			foreach($collections as $collection){
-				$sources[] = $collection->getName();
-			}
-		}
-		
-		return $sources;
+		return true;	
 	}
 
 /**
@@ -388,7 +387,7 @@ class MongodbSource extends DboSource {
 		$schema = array();
 		if (!empty($Model->mongoSchema) && is_array($Model->mongoSchema)) {
 			$schema = $Model->mongoSchema;
-			return $schema + $this->_defaultSchema;
+			return $schema + array('_id' => $this->_defaultSchema['_id']);
 		} elseif ($this->isConnected() && is_a($Model, 'Model') && !empty($Model->Behaviors)) {
 			$Model->Behaviors->attach('Mongodb.Schemaless');
 			if (!$Model->data) {
@@ -708,28 +707,7 @@ class MongodbSource extends DboSource {
 			$cond = array('_id' => $data['_id']);
 			unset($data['_id']);
 
-			//setting Mongo operator
-			if(empty($Model->mongoNoSetOperator)) {
-				if(!preg_grep('/^\$/', array_keys($data))) {
-					$data = array('$set' => $data);
-				} else {
-					if(!empty($data['modified'])) {
-						$modified = $data['modified'];
-						unset($data['modified']);
-						$data['$set'] = array('modified' => $modified);
-					}
-				}
-			} elseif(substr($Model->mongoNoSetOperator,0,1) === '$') {
-				if(!empty($data['modified'])) {
-					$modified = $data['modified'];
-					unset($data['modified']);
-					$data = array($Model->mongoNoSetOperator => $data, '$set' => array('modified' => $modified));
-				} else {
-					$data = array($Model->mongoNoSetOperator => $data);
-
-				}
-			}
-
+			$data = $this->setMongoUpdateOperator($Model, $data);
 
 			try{
 				$return = $mongoCollectionObj->update($cond, $data, array("multiple" => false));
@@ -756,6 +734,50 @@ class MongodbSource extends DboSource {
 		return $return;
 	}
 
+
+/**
+ * setMongoUpdateOperator
+ *
+ * Set Mongo update operator following saving data.
+ * This method is for update() and updateAll.
+ *
+ * @param Model $Model Model Instance
+ * @param array $values Save data
+ * @return array $data
+ * @access public
+ */
+	public function setMongoUpdateOperator(&$Model, $data) {
+		if(isset($data['updated'])) {
+			$updateField = 'updated';
+		} else {
+			$updateField = 'modified';			
+		}
+
+		//setting Mongo operator
+		if(empty($Model->mongoNoSetOperator)) {
+			if(!preg_grep('/^\$/', array_keys($data))) {
+				$data = array('$set' => $data);
+			} else {
+				if(!empty($data[$updateField])) {
+					$modified = $data[$updateField];
+					unset($data[$updateField]);
+					$data['$set'] = array($updateField => $modified);
+				}
+			}
+		} elseif(substr($Model->mongoNoSetOperator,0,1) === '$') {
+			if(!empty($data[$updateField])) {
+				$modified = $data[$updateField];
+				unset($data[$updateField]);
+				$data = array($Model->mongoNoSetOperator => $data, '$set' => array($updateField => $modified));
+			} else {
+				$data = array($Model->mongoNoSetOperator => $data);
+
+			}
+		}
+
+		return $data;
+	}
+
 /**
  * Update multiple Record
  *
@@ -770,10 +792,10 @@ class MongodbSource extends DboSource {
 			return false;
 		}
 
-		$fields = array('$set' => $fields);
-
 		$this->_stripAlias($conditions, $Model->alias);
 		$this->_stripAlias($fields, $Model->alias, false, 'value');
+
+		$fields = $this->setMongoUpdateOperator($Model, $fields);
 
 		$this->_prepareLogQuery($Model); // just sets a timer
 		try{
@@ -786,8 +808,8 @@ class MongodbSource extends DboSource {
 		}
 
 		if ($this->fullDebug) {
-			$this->logQuery("db.{$Model->useTable}.update( :fields, :params )",
-				array('fields' => $fields, 'params' => array("multiple" => true))
+			$this->logQuery("db.{$Model->useTable}.update( :conditions, :fields, :params )",
+				array('conditions' => $conditions, 'fields' => $fields, 'params' => array("multiple" => true))
 			);
 		}
 		return $return;
@@ -864,6 +886,9 @@ class MongodbSource extends DboSource {
 		} elseif (!empty($conditions) && !is_array($conditions)) {
 			$id = $conditions;
 			$conditions = array();
+		} elseif (!empty($conditions['id'])) { //for cakephp2.0
+			$id = $conditions['id'];
+			unset($conditions['id']);
 		}
 
 		$mongoCollectionObj = $this->_db
@@ -921,6 +946,12 @@ class MongodbSource extends DboSource {
 		$this->_stripAlias($fields, $Model->alias, false, 'value');
 		$this->_stripAlias($order, $Model->alias, false, 'both');
 
+		//for cakephp2.0. it doesn't call describe()
+		if(!empty($conditions['id']) && empty($conditions['_id'])) {
+			$conditions['_id'] = $conditions['id'];
+			unset($conditions['id']);
+		}
+
 		if (!empty($conditions['_id'])) {
 			$this->_convertId($conditions['_id']);
 		}
@@ -977,7 +1008,7 @@ class MongodbSource extends DboSource {
 				->limit($limit)
 				->skip($offset);
 			if ($this->fullDebug) {
-				$count = $return->count();
+				$count = $return->count(true);
 				$this->logQuery("db.{$Model->useTable}.find( :conditions, :fields ).sort( :order ).limit( :limit ).skip( :offset )",
 					compact('conditions', 'fields', 'order', 'limit', 'offset', 'count')
 				);
@@ -988,7 +1019,7 @@ class MongodbSource extends DboSource {
 				'query' => $conditions,
 				'sort' => $order,
 				'remove' => !empty($remove),
-				'update' => array('$set' => $modify),
+				'update' => $this->setMongoUpdateOperator($Model, $modify),
 				'new' => !empty($new),
 				'fields' => $fields,
 				'upsert' => !empty($upsert)
@@ -1247,10 +1278,19 @@ class MongodbSource extends DboSource {
 		}
 
 		$result = $this->query($query);
+
 		if($result['ok']) {
-			$data = $this->_db->selectCollection($result['result'])->find();
-			if(!empty($timeout)) {
-				$data->timeout($timeout);
+			if (isset($query['out']['inline']) && $query['out']['inline'] === 1) {
+				if (is_array($result['results'])) {
+					$data = $result['results'];
+				}else{
+					$data = false;
+				}
+			}else {
+				$data = $this->_db->selectCollection($result['result'])->find();
+				if(!empty($timeout)) {
+					$data->timeout($timeout);
+				}
 			}
 			return $data;
 		}
